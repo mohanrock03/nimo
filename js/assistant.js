@@ -27,6 +27,8 @@
     var turnText = "", turnHasWake = false, wakeInfo = null;
     var endTimer = null, windowTimer = null, resumeTimer = null;
     var lastSpoken = '', lastSpokenEnd = 0;
+    var starved = 0;              // mic sessions in a row that never received audio
+    var STARVED_LIMIT = 2;
     var lang = deps.lang || 'en-IN';
 
     function setState(s) {
@@ -46,16 +48,31 @@
       rec.continuous = true;
       rec.interimResults = true;
       rec.onresult = onResult;
+      var gotAudio = false, thisRec = rec;
+      // audiostart = the speech service really got the microphone. Sessions that end without it
+      // mean something else holds the mic (Android: Chrome's own getUserMedia stream).
+      rec.onaudiostart = function () { gotAudio = true; starved = 0; emit({ type: 'audio', on: true }); };
+      rec.onspeechstart = function () { emit({ type: 'voice', on: true }); };
+      rec.onspeechend = function () { emit({ type: 'voice', on: false }); };
       rec.onerror = function (e) {
         var err = (e && e.error) || 'unknown';
         if (err === 'no-speech' || err === 'aborted') return;
         log('error', err);
+        if (err === 'audio-capture') {
+          // Let the page try to free the mic first; it restarts us if it could.
+          emit({ type: 'mic-starved', count: ++starved, error: err });
+        }
         emit({ type: 'error', error: err });
         if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') stop();
       };
       rec.onend = function () {
         recActive = false;
         emit({ type: 'mic', on: false });
+        emit({ type: 'voice', on: false });
+        if (wantRec && rec === thisRec && !gotAudio && state !== 'off') {
+          starved++;
+          if (starved >= STARVED_LIMIT) emit({ type: 'mic-starved', count: starved });
+        }
         // Browsers end recognition after silence or ~60 s; reopen unless Nimo is talking or off.
         if (wantRec && state !== 'speaking' && state !== 'off') {
           resumeTimer = clear(resumeTimer);
@@ -193,6 +210,7 @@
     // ---------- public ----------
     function start() {
       if (state !== 'off') return;
+      starved = 0;
       setState('sleeping');
       startRec();
     }
