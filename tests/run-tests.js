@@ -4,6 +4,7 @@
 var Wake = require('../js/wake.js');
 var Brain = require('../js/brain.js');
 var Assistant = require('../js/assistant.js');
+var Mic = require('../js/mic.js');
 
 var passed = 0, failed = 0;
 function test(name, fn) {
@@ -165,6 +166,107 @@ function harness() {
   test('auto-restarts mic when the browser ends it', function () { ok(h.mic.current && h.mic.current !== first); ok(h.a.micOpen); });
 
   test('no overlap across all scenarios', function () { eq(h.overlaps, 0); });
+
+  // ---------- mic sharing (Android fix) ----------
+  var UA_ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-A546E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36';
+  var UA_ANDROID_TAB = 'Mozilla/5.0 (Linux; Android 13; SM-X200) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+  var UA_WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+  var UA_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0 Mobile/15E148 Safari/604.1';
+  test('meter off on Android phone Chrome', function () { var d = Mic.decideMeter({ ua: UA_ANDROID }); eq(d.useMeter, false); eq(d.reason, 'android'); });
+  test('meter off on Android tablet (no "Mobile" in UA)', function () { eq(Mic.decideMeter({ ua: UA_ANDROID_TAB }).useMeter, false); });
+  test('meter off when userAgentData says mobile', function () { eq(Mic.decideMeter({ ua: UA_WIN, uaDataMobile: true }).useMeter, false); });
+  test('meter off on iPhone', function () { eq(Mic.decideMeter({ ua: UA_IPHONE }).useMeter, false); });
+  test('meter stays on for desktop Chrome', function () { var d = Mic.decideMeter({ ua: UA_WIN, uaDataMobile: false }); eq(d.useMeter, true); eq(d.reason, 'desktop'); });
+  test('?meter=off forces it off on desktop', function () { eq(Mic.decideMeter({ ua: UA_WIN, search: '?meter=off' }).useMeter, false); });
+  test('?meter=on forces it on (testing override)', function () { eq(Mic.decideMeter({ ua: UA_ANDROID, search: '?x=1&meter=on' }).useMeter, true); });
+  test('remembered clash keeps meter off', function () { var d = Mic.decideMeter({ ua: UA_WIN, stored: 'off' }); eq(d.useMeter, false); eq(d.reason, 'remembered-clash'); });
+
+  function fakeMedia() {
+    var dev = { holders: 0, streams: [], acClosed: 0, pending: [] };
+    dev.getUserMedia = function () {
+      return new Promise(function (res) {
+        var s = { tracks: [{ stopped: false, stop: function () { if (!this.stopped) { this.stopped = true; dev.holders--; } } }],
+                  getTracks: function () { return this.tracks; } };
+        dev.holders++; dev.streams.push(s); dev.pending.push(function () { res(s); });
+      });
+    };
+    dev.flush = async function () { while (dev.pending.length) dev.pending.shift()(); await Promise.resolve(); await Promise.resolve(); };
+    dev.AC = function () {
+      this.createMediaStreamSource = function () { return { connect: function () {} }; };
+      this.createAnalyser = function () { return { fftSize: 0, getByteTimeDomainData: function (b) { for (var i = 0; i < b.length; i++) b[i] = i % 2 ? 160 : 96; } }; };
+      this.close = function () { dev.acClosed++; };
+    };
+    return dev;
+  }
+  var dev = fakeMedia(), levels = [];
+  var meter = Mic.createMeter({ getUserMedia: dev.getUserMedia, AudioContext: dev.AC, raf: function () { return 1; }, caf: function () {}, onLevel: function (v) { levels.push(v); } });
+  var p = meter.start(); await dev.flush(); await p;
+  test('meter opens the mic and reports a level', function () { ok(meter.active); eq(dev.holders, 1); ok(levels.length && levels[0] > 0); });
+  meter.release();
+  test('meter release stops every track and closes audio', function () { ok(!meter.active); eq(dev.holders, 0); eq(dev.acClosed, 1); eq(levels[levels.length - 1], 0); });
+  dev = fakeMedia();
+  meter = Mic.createMeter({ getUserMedia: dev.getUserMedia, AudioContext: dev.AC, onLevel: function () {} });
+  p = meter.start(); meter.release(); await dev.flush(); await p;
+  test('release during a pending mic request does not leak the stream', function () { ok(!meter.active); eq(dev.holders, 0); });
+
+  // Assistant tells the page when the speech service never gets audio.
+  function starvedEvents(hh) { return hh.events.filter(function (e) { return e.type === 'mic-starved'; }); }
+  h = harness(); h.a.start();
+  h.mic.current.onend(); h.clock.advance(200);
+  test('one audio-less session is not yet a clash', function () { eq(starvedEvents(h).length, 0); });
+  h.mic.current.onend(); h.clock.advance(200);
+  test('two audio-less sessions in a row -> mic-starved', function () { eq(starvedEvents(h).length, 1); });
+  h = harness(); h.a.start();
+  h.mic.current.onaudiostart(); h.mic.current.onend(); h.clock.advance(200);
+  h.mic.current.onaudiostart(); h.mic.current.onend(); h.clock.advance(200);
+  test('sessions that got audio never report mic-starved', function () { eq(starvedEvents(h).length, 0); ok(h.a.micOpen); });
+  h = harness(); h.a.start();
+  h.mic.current.onend(); h.clock.advance(200); h.mic.current.onaudiostart(); h.mic.current.onend(); h.clock.advance(200); h.mic.current.onend(); h.clock.advance(200);
+  test('audio resets the starvation count', function () { eq(starvedEvents(h).length, 0); });
+  h = harness(); h.a.start();
+  h.mic.current.onerror({ error: 'audio-capture' });
+  test('audio-capture error -> mic-starved + mic off', function () { eq(starvedEvents(h).length, 1); eq(h.a.state, 'off'); });
+  h = harness(); h.a.start();
+  h.hear([['hey nimo what time is it', true]]); h.clock.advance(700);
+  test('Nimo closing the mic to speak does not count as starvation', function () { eq(h.a.state, 'speaking'); eq(starvedEvents(h).length, 0); });
+  h = harness(); h.a.start();
+  h.mic.current.onspeechstart(); h.mic.current.onspeechend();
+  test('speech start/end reach the page for the orb pulse', function () {
+    var v = h.events.filter(function (e) { return e.type === 'voice'; }).map(function (e) { return e.on; });
+    eq(JSON.stringify(v), '[true,false]');
+  });
+
+  // End-to-end simulation of the Android clash: one exclusive microphone.
+  // The speech service only gets audio if nobody else holds the mic.
+  async function androidRun(ua) {
+    var dev = fakeMedia(), clock = FakeClock(), said = [], cur = null, starved = 0;
+    function Rec() { var self = this; this.start = function () { cur = self; clock.setTimeout(function () {
+        if (cur !== self) return;
+        if (dev.holders === 0) self.onaudiostart && self.onaudiostart();
+        else { self.onend && self.onend(); }   // Android: "cannot record now as Chrome is recording"
+      }, 50); };
+      this.abort = function () { if (cur === self) cur = null; }; this.stop = this.abort; }
+    var plan = Mic.decideMeter({ ua: ua });
+    var meter = Mic.createMeter({ getUserMedia: dev.getUserMedia, onLevel: function () {} });
+    var assistant = Assistant.createAssistant({
+      createRecognition: function () { return new Rec(); }, clock: clock,
+      now: function () { return new Date(2026, 8, 24, 15, 7); },
+      synth: { speak: function (t) { said.push(t); return Promise.resolve(); }, cancel: function () {} },
+      onEvent: function (e) { if (e.type === 'mic-starved') { starved++; if (meter.active) { meter.release(); assistant.stop(); clock.setTimeout(function () { assistant.start(); }, 400); } } }
+    });
+    if (plan.useMeter) { var mp = meter.start(); await dev.flush(); await mp; }
+    assistant.start(); clock.advance(2000);
+    function hear(t) { var r = cur; r.results = [[{ transcript: t }]]; r.results[0].isFinal = true; r.onresult({ results: r.results, resultIndex: 0 }); }
+    if (cur) hear('hey nimo what time is it');
+    clock.advance(800); await Promise.resolve(); await Promise.resolve();
+    return { said: said, starved: starved, plan: plan, holders: dev.holders };
+  }
+  var r1 = await androidRun(UA_ANDROID);
+  test('Android phone: page never opens the mic, wake word + answer work', function () { eq(r1.plan.useMeter, false); eq(r1.starved, 0); eq(r1.said.length, 1); ok(/3:07|15:07|time/i.test(r1.said[0]), r1.said[0]); });
+  var r2 = await androidRun('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36');
+  test('Android "desktop site" mode: clash detected, meter released, then it answers', function () { eq(r2.plan.useMeter, true); ok(r2.starved >= 1); eq(r2.holders, 0); eq(r2.said.length, 1); });
+
+
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
   process.exit(failed ? 1 : 0);
