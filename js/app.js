@@ -97,7 +97,12 @@
           'network': 'Speech recognition needs internet (the browser sends audio to its speech service). Check your connection.',
           'language-not-supported': 'This browser cannot recognise the selected language.'
         }[e.error];
+        if (e.error === 'audio-capture' && (meter.active || Date.now() - meterReleasedAt < 3000)) msg = null; // handled by releasing the meter
         if (msg) notice(msg);
+      } else if (e.type === 'voice') {
+        setVoice(e.on);
+      } else if (e.type === 'mic-starved') {
+        onMicStarved();
       } else if (e.type === 'log' && window.console) {
         console.log('[nimo]', e.kind, e.text);
       }
@@ -105,33 +110,68 @@
   });
   window.nimo = assistant; // handy for debugging in DevTools
 
-  // ---------- mic level for the orb (optional; only visual) ----------
+  // ---------- mic level for the orb (visual only) ----------
+  // Android: Google's speech service cannot record while this page holds the mic, so the
+  // real meter is only used where the mic can be shared (desktop). See js/mic.js.
+  var stored = null;
+  try { stored = localStorage.getItem(NimoMic.STORE_KEY); } catch (e) {}
+  var meterPlan = NimoMic.decideMeter({
+    ua: navigator.userAgent,
+    uaDataMobile: navigator.userAgentData ? navigator.userAgentData.mobile : undefined,
+    search: location.search,
+    stored: stored
+  });
+  var meter = NimoMic.createMeter({
+    getUserMedia: function (c) { return navigator.mediaDevices.getUserMedia(c); },
+    AudioContext: window.AudioContext || window.webkitAudioContext,
+    raf: requestAnimationFrame.bind(window), caf: cancelAnimationFrame.bind(window),
+    onLevel: function (v) { orb.setLevel(assistant.state === 'speaking' ? 0 : v); }
+  });
+  console.log('[nimo] mic meter:', meterPlan.useMeter ? 'on' : 'off', '(' + meterPlan.reason + ')');
+
+  // Without the real meter, pulse the orb from the speech service's own "hearing voice" events.
+  var voicePulse = null;
+  function setVoice(on) {
+    if (meter.active) return;
+    if (voicePulse) { clearInterval(voicePulse); voicePulse = null; }
+    if (on) {
+      voicePulse = setInterval(function () { orb.setLevel(0.35 + Math.random() * 0.45); }, 90);
+    } else {
+      orb.setLevel(0);
+    }
+  }
+
   function startLevelMeter() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.resolve();
-    return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
-      var AC = window.AudioContext || window.webkitAudioContext; var ac = new AC();
-      var src = ac.createMediaStreamSource(stream), an = ac.createAnalyser(); an.fftSize = 512; src.connect(an);
-      var buf = new Uint8Array(an.fftSize);
-      (function tick() {
-        an.getByteTimeDomainData(buf);
-        var sum = 0; for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
-        var rms = Math.sqrt(sum / buf.length);
-        orb.setLevel(assistant.state === 'speaking' ? 0 : Math.min(1, rms * 6));
-        requestAnimationFrame(tick);
-      })();
-    }).catch(function (err) {
+    if (!meterPlan.useMeter || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.resolve();
+    return meter.start().catch(function (err) {
       if (err && err.name === 'NotAllowedError') notice('Microphone permission was blocked. Click the lock icon in the address bar, allow Microphone, then reload.');
     });
   }
 
+  // Speech recognition could not get the mic. If our meter holds it, free it and retry once.
+  var starvedNotified = false, meterReleasedAt = 0;
+  function onMicStarved() {
+    if (meter.active) {
+      console.log('[nimo] speech service could not get the mic - releasing the orb meter');
+      meter.release(); meterReleasedAt = Date.now();
+      meterPlan = { useMeter: false, reason: 'runtime-clash' };
+      try { localStorage.setItem(NimoMic.STORE_KEY, 'off'); } catch (e) {}
+      assistant.stop();
+      setTimeout(function () { if (!$('start').hidden) return; assistant.start(); }, 400);
+    } else if (!starvedNotified) {
+      starvedNotified = true;
+      notice('The speech service cannot reach the microphone. Close other apps or tabs using the mic (calls, recorders, other voice apps), then tap Stop and Start Nimo again.');
+    }
+  }
+
   $('start').addEventListener('click', function () {
-    $('start').hidden = true; $('stop').hidden = false;
+    $('start').hidden = true; $('stop').hidden = false; starvedNotified = false;
     // Unlock speech output with a silent utterance inside the click (autoplay rules).
     try { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) {}
     startLevelMeter().then(function () { assistant.start(); });
   });
   $('stop').addEventListener('click', function () {
-    assistant.stop(); $('stop').hidden = true; $('start').hidden = false; heardEl.textContent = ''; replyEl.textContent = '';
+    assistant.stop(); meter.release(); setVoice(false); $('stop').hidden = true; $('start').hidden = false; heardEl.textContent = ''; replyEl.textContent = '';
   });
   $('lang').addEventListener('change', function (e) { assistant.setLang(e.target.value); });
   // Tap the orb while Nimo is talking to cut it off.
