@@ -1,0 +1,26 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; color: #bfefff; overflow: hidden;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans Tamil", sans-serif; }
+#orb { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: pointer; }
+.top { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 22px; pointer-events: none; }
+.brand { letter-spacing: 0.5em; font-weight: 300; font-size: 15px; color: #6fe3ff; text-shadow: 0 0 12px rgba(0,200,255,.6); }
+.controls { display: flex; gap: 10px; align-items: center; pointer-events: auto; }
+.mic { font-size: 11px; letter-spacing: .15em; padding: 5px 9px; border: 1px solid #1d4c5c; border-radius: 12px; color: #4f7f8f; }
+.mic.on { color: #5fffd0; border-color: #2fbf9f; box-shadow: 0 0 10px rgba(80,255,210,.35); }
+select { background: #031118; color: #9fe8ff; border: 1px solid #1d4c5c; border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+.hud { position: fixed; left: 0; right: 0; top: calc(44vh + min(30vw, 30vh) + 28px); text-align: center; padding: 0 20px; pointer-events: none; }
+.status { font-size: 13px; letter-spacing: .35em; text-transform: uppercase; color: #6fe3ff; text-shadow: 0 0 10px rgba(0,200,255,.5); min-height: 18px; }
+.status.listening, .status.speaking { color: #5fffd0; text-shadow: 0 0 12px rgba(80,255,210,.7); }
+.status.off { color: #3f6f7f; }
+.heard { margin-top: 12px; font-size: 16px; color: #7fa9b8; min-height: 22px; font-style: italic; }
+.reply { margin-top: 8px; font-size: 20px; color: #d8f7ff; min-height: 28px; }
+.start, .stop { position: fixed; left: 50%; transform: translateX(-50%); border-radius: 30px; cursor: pointer;
+  font: inherit; letter-spacing: .2em; text-transform: uppercase; }
+.start { bottom: 9vh; padding: 14px 34px; font-size: 14px; background: rgba(0,40,55,.6); color: #aef3ff;
+  border: 1px solid #2aa8c8; box-shadow: 0 0 22px rgba(0,190,255,.35); }
+.start:hover { box-shadow: 0 0 30px rgba(0,210,255,.6); }
+.stop { bottom: 4vh; padding: 8px 20px; font-size: 11px; background: transparent; color: #4f8595; border: 1px solid #1d4c5c; }
+.notice { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 640px; width: calc(100% - 32px);
+  background: rgba(40,20,0,.85); border: 1px solid #a8742a; color: #ffd9a0; padding: 10px 14px; border-radius: 10px; font-size: 13px; line-height: 1.45; }
+@media (max-width: 600px) { .reply { font-size: 17px; } .heard { font-size: 14px; } .brand { font-size: 13px; } }
