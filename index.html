@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nimo</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="orb" aria-hidden="true"></canvas>
+
+  <header class="top">
+    <div class="brand">NIMO</div>
+    <div class="controls">
+      <span id="mic" class="mic" title="Microphone">MIC OFF</span>
+      <select id="lang" aria-label="Listening language">
+        <option value="en-IN">English / Tanglish</option>
+        <option value="ta-IN">தமிழ் (Tamil)</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="hud">
+    <div id="status" class="status">Tap to start</div>
+    <div id="heard" class="heard" aria-live="polite"></div>
+    <div id="reply" class="reply" aria-live="polite"></div>
+  </main>
+
+  <button id="start" class="start">Start Nimo</button>
+  <button id="stop" class="stop" hidden>Stop</button>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <script src="js/wake.js"></script>
+  <script src="js/brain.js"></script>
+  <script src="js/assistant.js"></script>
+  <script src="js/orb.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
